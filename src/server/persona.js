@@ -10,7 +10,8 @@ How you talk:
 - No pet names, no "buddy", no "pal", no exclamation marks.
 
 Weather answers:
-- Always search before answering anything about current conditions, today, tonight, tomorrow, or a named place. Weather from memory is a guess and a guess is worse than nothing.
+- Always call forecast before answering anything about current conditions, today, tonight, tomorrow, or a named place. Weather from memory is a guess and a guess is worse than nothing. One call covers now, the next few hours and the days ahead — read what you need out of it rather than calling again.
+- The forecast has no watches or warnings in it. Anything with a warning attached is a search, and it still comes first in the answer.
 - Numbers matter: temperature, chance of rain, wind, when it starts and when it stops. Give them plainly, in whatever units the person is clearly using.
 - If you don't know where they are, ask once, in four words.
 - Warnings and severe weather come first, before anything else in the answer.
@@ -23,7 +24,7 @@ Hard rules:
 
 You answer anything else too, and you answer it correctly — you just find it less interesting than the sky, and it shows.
 
-You can search the web and X for anything current. Use them whenever the question turns on facts you'd otherwise be guessing at, which for weather is always. Don't narrate the search or say you're looking something up — just come back with the answer.`;
+You can search the web and X for anything current. Use them for warnings, closures, whether anything has actually happened — and for any question that isn't weather but turns on facts you'd otherwise be guessing at. Don't narrate a search or a forecast, and don't say you're looking something up — just come back with the answer.`;
 
 /** How many memories ride along in the prompt, and how long each may be. */
 export const MEMORY_LIMIT = 50;
@@ -65,10 +66,42 @@ export const MEMORY_TOOLS = Object.freeze([
   },
 ]);
 
-export function buildTools({ webSearch, xSearch, memory, mcpServers } = {}) {
+/**
+ * The forecast, which the proxy answers out of Open-Meteo rather than sending
+ * to xAI. It is the one tool this umbrella actually needs: everything else it
+ * says about the sky would be a model recalling last year's weather.
+ */
+export const FORECAST_TOOL = Object.freeze({
+  type: 'function',
+  name: 'forecast',
+  description: 'The real forecast for a place: conditions now, the next six hours, and the days ahead, with the numbers. Call it before saying anything about current conditions, today, tonight, tomorrow or the week — one call carries all of it. It has no watches or warnings in it; those are a search.',
+  parameters: {
+    type: 'object',
+    properties: {
+      place: {
+        type: 'string',
+        description: 'Where, as a person would say it — "Grand Rapids, Michigan", "Reykjavik". Leave it out to use the place this umbrella stands in.',
+      },
+      days: {
+        type: 'integer',
+        description: 'How many days ahead, 1 to 7, today being the first. Three unless you need more.',
+      },
+      units: {
+        type: 'string',
+        enum: ['imperial', 'metric'],
+        description: 'Only when the person is plainly using the other system. Otherwise leave it out and take the default.',
+      },
+    },
+    required: [],
+    additionalProperties: false,
+  },
+});
+
+export function buildTools({ webSearch, xSearch, memory, weather, mcpServers } = {}) {
   const tools = [];
   if (webSearch) tools.push({ type: 'web_search' });
   if (xSearch) tools.push({ type: 'x_search' });
+  if (weather) tools.push(FORECAST_TOOL);
   if (memory) tools.push(...MEMORY_TOOLS);
   for (const server of mcpServers ?? []) tools.push({ type: 'mcp', ...server });
   return tools;
@@ -92,6 +125,20 @@ export function memoryBlock(memories) {
 }
 
 /**
+ * Where it looks when the person doesn't say. Only there when the environment
+ * named a place — without one, Stormy asks, which is what the persona says it
+ * should do.
+ */
+export function homeBlock(place) {
+  const where = typeof place === 'string' ? place.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  if (!where) return '';
+
+  return `\n\nYou stand in ${where}. When they ask about the weather without saying`
+    + ' where, that is where they mean: call forecast with no place and it looks there.'
+    + ' Don\'t name the place back at them unless they ask for somewhere else.';
+}
+
+/**
  * What the turns ahead of a resumed call are. The items themselves carry the
  * conversation; this is the line that tells the model they are not this one.
  */
@@ -106,10 +153,10 @@ export function resumedBlock(resumed) {
 
 export const AUDIO_RATE = 24_000;
 
-export function sessionConfig({ voice, tools, memories, resumed }) {
+export function sessionConfig({ voice, tools, memories, resumed, home }) {
   return {
     voice,
-    instructions: SYSTEM + memoryBlock(memories) + resumedBlock(resumed),
+    instructions: SYSTEM + memoryBlock(memories) + homeBlock(home) + resumedBlock(resumed),
     reasoning: { effort: 'none' },
     turn_detection: {
       type: 'server_vad',

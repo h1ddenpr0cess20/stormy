@@ -5,9 +5,10 @@ by a front coming through, and useless at small talk about nice days. It runs on
 an xAI Grok speech-to-speech session, and the canopy's flutter, sway and squash
 are driven by the live audio, so it moves with whichever of you is talking.
 
-It searches the web for every forecast it gives — weather from a model's memory
-is a guess — and can call remote MCP servers. It also remembers what you tell it
-to, between calls.
+Every forecast it gives comes from Open-Meteo, called by the proxy rather than
+recalled by the model — weather from a model's memory is a guess. It searches
+the web for warnings and anything else current, and can call remote MCP servers.
+It also remembers what you tell it to, between calls.
 
 ![Stormy in a desktop browser](docs/screenshots/desktop.png)
 
@@ -31,6 +32,11 @@ leaves the answer playing, and the conversation is still there when you turn it
 back on. It also switches itself off after a minute of silence, and the call
 survives that too. Holding the mic down is the hang-up — a ring closes around it
 while you hold, and the call ends when it lands.
+
+`tools` has a switch for each tool it can reach for — web search, X search, the
+forecast, and any MCP server the environment gave it. Switching one off takes it out of the
+call already in progress, and it stays off in that browser until you switch it
+back on. Nothing there can add a tool the server was not started with.
 
 The log keeps every conversation. `continue` on one picks it back up: the call is
 dialled again with those turns handed over as context, and what you say from

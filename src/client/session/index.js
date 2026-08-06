@@ -52,7 +52,7 @@ function micUnavailable() {
     : 'this browser won’t hand over a microphone — try opening the page in Safari or Chrome';
 }
 
-export function createVoiceSession({ model, voice, memory } = {}) {
+export function createVoiceSession({ model, voice, memory, switches } = {}) {
   const { on, emit } = createEmitter();
   const messages = [];
   const tools = memory ? createTools({ memory }) : {};
@@ -94,10 +94,11 @@ export function createVoiceSession({ model, voice, memory } = {}) {
    * the second frame the model waits forever on its own tool.
    */
   function runTool({ call_id: callId, name, args }) {
+    const label = toolLabel(name);
+    if (label) emit('tool', label);
+
     const tool = tools[name];
     if (!tool) return;
-
-    emit('tool', toolLabel(name));
     let output;
     try {
       output = tool(args);
@@ -157,6 +158,7 @@ export function createVoiceSession({ model, voice, memory } = {}) {
         voice: currentVoice,
         model: currentModel,
         memories: memory?.lines() ?? [],
+        toolsOff: switches?.off ?? [],
         history: prior(context),
         onEvent: events.handle,
         onClose: (reason) => {
@@ -241,6 +243,15 @@ export function createVoiceSession({ model, voice, memory } = {}) {
     syncMemory() {
       if (!memory || !call?.open) return false;
       return call.send({ type: 'session.memory', memories: memory.lines() });
+    },
+    /**
+     * The same for the tool switches: the proxy re-declares the tools on the
+     * call that is up, so one goes out of reach mid-sentence rather than at the
+     * next dial.
+     */
+    syncTools() {
+      if (!switches || !call?.open) return false;
+      return call.send({ type: 'session.tools', off: switches.off });
     },
     get connected() {
       return call?.open ?? false;

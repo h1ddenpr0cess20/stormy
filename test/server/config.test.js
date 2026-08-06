@@ -27,6 +27,26 @@ describe('loadConfig', () => {
     assert.equal(loadConfig({ XAI_WEB_SEARCH: '' }).tools.webSearch, true);
   });
 
+  it('has the forecast on, in Fahrenheit, until it is told otherwise', () => {
+    const config = loadConfig({});
+    assert.equal(config.tools.weather, true);
+    assert.equal(config.weather.units, 'imperial');
+    assert.equal(config.weather.place, '');
+
+    assert.equal(loadConfig({ WEATHER: 'false' }).tools.weather, false);
+    assert.equal(loadConfig({ WEATHER_UNITS: 'metric' }).weather.units, 'metric');
+    assert.equal(loadConfig({ WEATHER_UNITS: 'METRIC' }).weather.units, 'metric');
+    assert.equal(loadConfig({ WEATHER_UNITS: 'kelvin' }).weather.units, 'imperial');
+  });
+
+  it('takes a home for the forecast, and a timeout in seconds', () => {
+    assert.equal(loadConfig({ WEATHER_PLACE: ' Grand Rapids, Michigan ' }).weather.place,
+      'Grand Rapids, Michigan');
+    assert.equal(loadConfig({ WEATHER_TIMEOUT: '3' }).weather.timeoutMs, 3000);
+    assert.equal(loadConfig({ WEATHER_TIMEOUT: 'soon' }).weather.timeoutMs, undefined);
+    assert.equal(loadConfig({ WEATHER_TIMEOUT: '-2' }).weather.timeoutMs, undefined);
+  });
+
   it('reads MCP servers from the environment', () => {
     const { tools } = loadConfig({
       XAI_MCP_SERVERS: '[{"server_label":"a","server_url":"https://a.example/mcp"}]',

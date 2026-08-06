@@ -27,10 +27,24 @@ Two things are dropped as persona overrides — a `session.update` from the
 browser, and the `instructions` field on a `response.create`.
 `test/server/realtime.test.js` covers that.
 
-One frame type never reaches xAI: `session.memory`, which the page sends with
-what it has stored. The proxy folds those lines into the instructions and
-re-sends its own `session.update`, so the persona stays here and the memories
-stay in the browser.
+Frames from xAI are forwarded as bytes and mostly not read: audio deltas are
+the bulk of the traffic, and parsing every one of them to find the occasional
+tool call would not pay. A regex over the raw text picks out the three frames a
+function call can arrive in — `response.output_item.done`,
+`response.function_call_arguments.done`, and the `response.done` that repeats
+it — and only those are parsed. A call to `forecast` is answered here: the proxy
+fetches the weather, sends the result back as a `function_call_output`, and
+follows it with `response.create`, without which the model waits forever on a
+tool it asked for itself. Each call is answered once, whichever of the three
+frames carried it.
+
+Two frame types never reach xAI. `session.memory` carries what the page has
+stored; the proxy folds those lines into the instructions and re-sends its own
+`session.update`, so the persona stays here and the memories stay in the
+browser. `session.tools` names the tools the page has switched off, and the
+proxy re-declares the session without them — a subtraction only, checked against
+the tools this server actually has, so a page can narrow what the model may
+reach for and can never widen it.
 
 ## Audio
 
@@ -58,7 +72,10 @@ Safari and under any CSP that disallows `data:`.
 
 The log is one record per call under `stormy.history.v1`; memory is a list of
 lines under `stormy.memory.v1`. Neither is uploaded — the proxy holds no copy of
-either.
+either. The tool switches are a third,
+`stormy.tools.v1`, holding the names that are switched *off* — so a tool nobody
+has touched is on, and one the server gains later arrives on rather than
+quietly missing.
 
 The last 40 conversations are kept, and the oldest are shed to stay inside a
 300 KB budget, since that space belongs to the whole origin. Private-mode Safari
@@ -106,6 +123,30 @@ Memories are text the person typed or dictated, so they land inside the prompt.
 Flattening and capping them in `persona.js` keeps a memory from opening a new
 instruction paragraph, and the persona is always first in the string.
 
+## The forecast
+
+Weather is the one subject where a language model is reliably wrong: it cannot
+know today's numbers, and a web search hands it somebody's prose about them. So
+`forecast` is a function tool the proxy answers itself, out of Open-Meteo —
+which is here rather than a paid API because it needs no key, which means there
+is no credential in this process for the page to be kept away from.
+
+`src/server/weather.js` does three things and nothing else: turns a place name
+into a point on the earth, asks for that point's weather in the units the call
+wants, and cuts the answer down to what someone would say out loud. Codes become
+words, timestamps become clock times in the place's own zone, and every number
+is rounded — a model handed `63.8199997` will eventually read all of it.
+
+`run` never throws and never rejects. A tool call the model is waiting on has to
+come back with something, so a place that doesn't exist, an API that is down and
+a request that stalls all return `{ ok: false, error }` with a sentence in it.
+Stormy reads the sentence rather than hanging.
+
+Whether the page has the forecast switched off is deliberately not checked when
+a call arrives. A switch thrown between the model asking and the frame landing
+would otherwise leave it waiting on silence; the switch takes the tool out of
+the next `session.update`, which is what stops it being called again.
+
 ## States
 
 `idle` · `listening` · `thinking` · `speaking` — each a set of targets for
@@ -146,6 +187,7 @@ src/
     styles.css          The HUD around the umbrella
     api.js              /api/config, as a function
     history.js          Past conversations in localStorage, and picking one up
+    tools.js            Which of the server's tools this browser switched off
     memory.js           What it remembers between calls, in localStorage
     stormy/             Geometry and animation. Knows nothing about transports
       index.js            The controller and the per-frame loop
@@ -166,6 +208,7 @@ src/
       hud.js              Status chip, transcript, caption, tool label
       history.js          The log panel behind `log`, and its `continue`
       memory.js           The memory panel behind the `memory` button
+      tools.js            The tool switches behind the `tools` button
       controls.js         Mic (tap mutes, hold hangs up), field, send, pickers
       viewport.js         Keeps the composer above the on-screen keyboard
       stage.js            Strips the starter component's own chrome
@@ -175,7 +218,9 @@ src/
     index.js            Entry point
     app.js              Middleware chain + the upgrade handler
     api.js              /api/config
-    realtime.js         The socket proxy, and the allowlist
+    realtime.js         The socket proxy, the allowlist, and the tool answers
+    weather.js          Open-Meteo: geocoding, the forecast, and a cache
+    tools.js            What the page may switch off, and what that leaves
     persona.js          Who Stormy is, and the session config
     config.js           The environment, resolved once
     static.js           Hosting for dist/ — production only
@@ -199,9 +244,9 @@ phone held upright that's the difference between an umbrella and a wedge of one.
 
 ## The transport seam
 
-`session/index.js` exposes `on`, `start`, `stop`, `send`, `cancel`, `syncMemory`,
-`messages`, `context`, `connected`, `busy`, `stale`, `state`, `muted`, `model`,
-`voice` — and emits:
+`session/index.js` exposes `on`, `start`, `stop`, `send`, `cancel`,
+`syncMemory`, `syncTools`, `messages`, `context`, `connected`, `busy`, `stale`,
+`state`, `muted`, `model`, `voice` — and emits:
 
 ```
 'state'        listening | thinking | speaking | idle
