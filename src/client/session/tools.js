@@ -1,9 +1,14 @@
 const LABELS = {
   remember: 'remembering that',
   forget: 'forgetting that',
+  forecast: 'reading the sky',
 };
 
-/** The HUD caption for a tool call, or null for a name we don't run. */
+/**
+ * The HUD caption for a tool call, or null for a name nobody labels. Not every
+ * label belongs to a tool the page runs — the forecast is answered by the
+ * proxy, and the call still passes through here on its way to the model.
+ */
 export function toolLabel(name) {
   return LABELS[name] ?? null;
 }

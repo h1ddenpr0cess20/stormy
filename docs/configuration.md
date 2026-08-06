@@ -11,6 +11,11 @@ Both `npm run dev` and `npm start` read `.env`.
 | `XAI_WEB_SEARCH` | `true` | |
 | `XAI_X_SEARCH` | `true` | |
 | `MEMORY` | `true` | The `remember` and `forget` tools, and the memory block in the prompt |
+| `WEATHER` | `true` | The `forecast` tool, answered from Open-Meteo by the proxy |
+| `WEATHER_UNITS` | `imperial` | `imperial` is Fahrenheit, mph and inches; `metric` is Celsius, km/h and mm |
+| `WEATHER_PLACE` | — | Where it looks when nobody says. Without one, Stormy asks |
+| `WEATHER_TIMEOUT` | `8` | Seconds before a stalled forecast gives up and says so |
+| `OPEN_METEO_URL`, `OPEN_METEO_GEOCODING_URL` | Open-Meteo | Point the forecast at a stub
 | `XAI_MCP_SERVERS` | — | JSON array of remote MCP servers, or put it in `mcp.json` |
 | `PORT` | `5173` | |
 | `SSL_KEY`, `SSL_CERT` | — | Paths to a real certificate; `npm start` then serves HTTPS |
@@ -52,9 +57,33 @@ your Docker Hub account isn't `h1ddenpr0cess20`.
 ## Tools
 
 `web_search` and `x_search` are on by default. Both execute inside xAI, so
-there's nothing to implement here and no second credential to hold. Stormy is
-told not to narrate a search; the only sign one is running is the label under
-the status chip.
+there's nothing to implement here and no second credential to hold. The
+forecast is the exception: it is answered by this server, out of Open-Meteo.
+Stormy is told not to narrate either one; the only sign a tool is running is the
+label under the status chip.
+
+### The forecast
+
+`forecast` is the one tool this server answers itself. The model calls it, the
+proxy fetches [Open-Meteo](https://open-meteo.com), and the numbers go back as
+the tool's output — no key, no account, and nothing about it in the page.
+
+It comes back with conditions now, the next six hours, and up to seven days
+ahead: temperature and what it feels like, humidity, wind and gusts, the chance
+of precipitation and how much, sunrise and sunset, each condition already turned
+from a WMO code into words. Every number is rounded on the way out, because a
+model handed 63.8199997 will eventually read all of it out loud.
+
+The model may name a place ("Reykjavik"), pass coordinates, or leave it out
+entirely, in which case it looks at `WEATHER_PLACE`. Place names are resolved
+through Open-Meteo's geocoder and cached for the life of the process, so asking
+about the same town twice costs one lookup. Units follow `WEATHER_UNITS` unless
+the model asks for the other system, which the persona tells it to do only when
+the person plainly uses it.
+
+What the forecast does not carry is watches and warnings — Open-Meteo has no
+alerts endpoint. Those stay a web search, and the persona still puts them first
+in the answer.
 
 Remote MCP servers go in `XAI_MCP_SERVERS` as a JSON array, or in `mcp.json`
 (gitignored), and are also executed by xAI:
@@ -78,7 +107,7 @@ rather than at xAI.
 ### Switching one off for a call
 
 `tools` opens a switch for each tool this server offers — web search, X search,
-and one per MCP server. Switching one off takes it out of the call that is up
+the forecast, and one per MCP server. Switching one off takes it out of the call that is up
 right now: the proxy re-declares the tools with `session.update`, so there is no
 redial and nothing to reconnect. The switches live in `localStorage`, so they
 hold across calls and reloads in that browser.

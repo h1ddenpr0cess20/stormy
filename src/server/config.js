@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
 
+import { DEFAULT_UNITS, UNITS } from './weather.js';
+
 export const KNOWN_VOICES = Object.freeze([
   'helix', 'rex', 'sal', 'atlas', 'zagan', 'orion', 'perseus',
   'leo', 'zenith', 'rigel', 'castor', 'ursa', 'naksh', 'kepler',
@@ -39,6 +41,25 @@ function readMcpFile(path) {
   }
 }
 
+/**
+ * The forecast tool's own settings. Open-Meteo takes no key, so there is
+ * nothing secret here — only which units to ask it for, and where to look when
+ * the person doesn't say. The two URLs are here so a test can point them at a
+ * stub, the same way `XAI_REALTIME_URL` does for the socket.
+ */
+function loadWeather(env) {
+  const units = String(env.WEATHER_UNITS ?? '').toLowerCase();
+  const seconds = Number(env.WEATHER_TIMEOUT);
+
+  return {
+    units: UNITS[units] ? units : DEFAULT_UNITS,
+    place: (env.WEATHER_PLACE ?? '').trim(),
+    forecastUrl: env.OPEN_METEO_URL || undefined,
+    geocodingUrl: env.OPEN_METEO_GEOCODING_URL || undefined,
+    timeoutMs: Number.isFinite(seconds) && seconds > 0 ? seconds * 1000 : undefined,
+  };
+}
+
 export function loadConfig(env = process.env) {
   const defaultVoice = env.XAI_VOICE || KNOWN_VOICES[0];
   const defaultModel = env.XAI_MODEL || KNOWN_MODELS[0];
@@ -59,7 +80,9 @@ export function loadConfig(env = process.env) {
       webSearch: flag(env.XAI_WEB_SEARCH, true),
       xSearch: flag(env.XAI_X_SEARCH, true),
       memory: flag(env.MEMORY, true),
+      weather: flag(env.WEATHER, true),
       mcpServers: loadMcpServers(env),
     },
+    weather: loadWeather(env),
   };
 }

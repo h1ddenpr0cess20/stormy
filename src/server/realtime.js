@@ -2,6 +2,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 
 import { buildTools, sessionConfig } from './persona.js';
 import { pickTools, switchedOff } from './tools.js';
+import { createWeather } from './weather.js';
 
 const ALLOWED = new Set([
   'input_audio_buffer.append',
@@ -13,6 +14,25 @@ const ALLOWED = new Set([
 ]);
 
 const MAX_FRAME = 1 << 20;
+
+/**
+ * Which frames from xAI are worth parsing on the way past. Everything else is
+ * forwarded as bytes — audio deltas are most of the traffic and the largest,
+ * and none of this is worth a JSON.parse of every one of them.
+ */
+const INSPECT = /"(response\.done|response\.output_item\.done|response\.function_call_arguments\.done)"/;
+
+/** The function calls in one server event, whichever shape it arrived in. */
+function functionCalls(event) {
+  if (event.type === 'response.function_call_arguments.done') return [event];
+  if (event.type === 'response.output_item.done') {
+    return event.item?.type === 'function_call' ? [event.item] : [];
+  }
+  if (event.type === 'response.done') {
+    return (event.response?.output ?? []).filter((item) => item?.type === 'function_call');
+  }
+  return [];
+}
 
 /**
  * The page's own frame, handled here and never forwarded: it carries the
@@ -113,7 +133,11 @@ export function sanitize(event) {
   return event;
 }
 
-export function createRealtimeProxy(config) {
+/**
+ * The weather is made once, outside a call: the places it has looked up are
+ * worth keeping between them, and between the people using this server.
+ */
+export function createRealtimeProxy(config, weather = createWeather(config.weather)) {
   const wss = new WebSocketServer({ noServer: true });
 
   wss.on('connection', (client, req) => {
@@ -153,9 +177,63 @@ export function createRealtimeProxy(config) {
         voice,
         tools: buildTools(pickTools(config.tools, off)),
         memories,
+        home: weather.home,
         resumed: history.length > 0,
       }),
     });
+
+    const sendUp = (event) => {
+      if (upstream.readyState !== WebSocket.OPEN) return false;
+      upstream.send(JSON.stringify(event));
+      return true;
+    };
+
+    /** A tool call is answered once, whichever of the three frames carried it. */
+    const answered = new Set();
+
+    /**
+     * The forecast, fetched here and handed back as a `function_call_output`
+     * followed by a `response.create` — without that second frame the model
+     * waits forever on a tool it asked for itself.
+     *
+     * Whether the page has the tool switched off is deliberately not checked:
+     * a switch thrown between the call going out and this frame arriving would
+     * otherwise leave the model waiting on silence. `run` has a sentence for
+     * every way this can fail; a silence does not.
+     */
+    async function answer(call) {
+      const id = call?.call_id;
+      if (!id || !weather.handles(call?.name) || answered.has(id)) return;
+      answered.add(id);
+
+      let args;
+      try {
+        args = call.arguments ? JSON.parse(call.arguments) : {};
+      } catch {
+        args = {};
+      }
+
+      const output = await weather.run(call.name, args);
+      sendUp({
+        type: 'conversation.item.create',
+        item: { type: 'function_call_output', call_id: id, output: JSON.stringify(output) },
+      });
+      sendUp({ type: 'response.create' });
+    }
+
+    /** Everything the proxy needs from a frame it is otherwise only passing on. */
+    function inspect(text) {
+      let event;
+      try {
+        event = JSON.parse(text);
+      } catch {
+        return;
+      }
+      /** Nothing awaits this, so a failure that got past `run` ends up here. */
+      for (const call of functionCalls(event)) {
+        answer(call).catch((err) => tell(`the forecast failed — ${err.message}`));
+      }
+    }
 
     /**
      * An earlier conversation, laid back down as items. It goes after the
@@ -176,6 +254,9 @@ export function createRealtimeProxy(config) {
 
     upstream.on('message', (data, isBinary) => {
       if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary });
+      if (isBinary) return;
+      const text = data.toString();
+      if (INSPECT.test(text)) inspect(text);
     });
 
     upstream.on('error', (err) => {

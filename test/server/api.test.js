@@ -43,6 +43,7 @@ describe('GET /api/config', () => {
     assert.deepEqual(body.switches, [
       { name: 'web_search', label: 'web search' },
       { name: 'x_search', label: 'X search' },
+      { name: 'forecast', label: 'forecast' },
       { name: 'mcp:orders', label: 'orders' },
     ]);
   });

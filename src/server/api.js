@@ -20,6 +20,7 @@ export function createApiMiddleware(config) {
           web_search: config.tools.webSearch,
           x_search: config.tools.xSearch,
           memory: config.tools.memory,
+          forecast: config.tools.weather,
           mcp: config.tools.mcpServers.map((s) => s.server_label),
         },
         /** What the page may switch off for its own call, and what to call it. */

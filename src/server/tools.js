@@ -14,6 +14,7 @@ export function toolCatalog(tools = {}) {
   const catalog = [];
   if (tools.webSearch) catalog.push({ name: 'web_search', label: 'web search' });
   if (tools.xSearch) catalog.push({ name: 'x_search', label: 'X search' });
+  if (tools.weather) catalog.push({ name: 'forecast', label: 'forecast' });
   for (const server of tools.mcpServers ?? []) {
     catalog.push({ name: `mcp:${server.server_label}`, label: server.server_label });
   }
@@ -40,6 +41,7 @@ export function pickTools(tools, off = []) {
     ...tools,
     webSearch: Boolean(tools.webSearch) && on('web_search'),
     xSearch: Boolean(tools.xSearch) && on('x_search'),
+    weather: Boolean(tools.weather) && on('forecast'),
     mcpServers: (tools.mcpServers ?? []).filter((server) => on(`mcp:${server.server_label}`)),
   };
 }

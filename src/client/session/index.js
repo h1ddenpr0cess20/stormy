@@ -94,10 +94,11 @@ export function createVoiceSession({ model, voice, memory, switches } = {}) {
    * the second frame the model waits forever on its own tool.
    */
   function runTool({ call_id: callId, name, args }) {
+    const label = toolLabel(name);
+    if (label) emit('tool', label);
+
     const tool = tools[name];
     if (!tool) return;
-
-    emit('tool', toolLabel(name));
     let output;
     try {
       output = tool(args);

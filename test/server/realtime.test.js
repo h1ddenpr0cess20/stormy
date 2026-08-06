@@ -4,6 +4,7 @@ import { after, before, describe, it } from 'node:test';
 import { historyItem, priorTurns, sanitize } from '../../src/server/realtime.js';
 import { SYSTEM } from '../../src/server/persona.js';
 import { startApp, settle } from '../helpers/app.js';
+import { startOpenMeteoStub } from '../helpers/open-meteo-stub.js';
 import { startXaiStub } from '../helpers/xai-stub.js';
 
 describe('sanitize', () => {
@@ -147,7 +148,8 @@ describe('the proxy', () => {
     assert.equal(first.session.voice, 'sal');
 
     const named = first.session.tools.map((t) => t.name ?? t.type);
-    assert.deepEqual(named, ['web_search', 'x_search', 'remember', 'forget', 'mcp']);
+    assert.deepEqual(named,
+      ['web_search', 'x_search', 'forecast', 'remember', 'forget', 'mcp']);
   });
 
   it('keeps MCP credentials upstream, never in a frame to the page', async () => {
@@ -338,7 +340,7 @@ describe('the proxy', () => {
 
       const forwarded = xai.received().slice(before);
       assert.deepEqual(forwarded.map((f) => f.type), ['session.update']);
-      assert.deepEqual(declared(), ['web_search', 'remember', 'forget']);
+      assert.deepEqual(declared(), ['web_search', 'forecast', 'remember', 'forget']);
     });
 
     it('comes back when it is switched on again', async () => {
@@ -370,7 +372,8 @@ describe('the proxy', () => {
       client.send({ type: 'session.tools', off: ['remember', 'mcp:nowhere', 42] });
       await settle();
 
-      assert.deepEqual(declared(), ['web_search', 'x_search', 'remember', 'forget', 'mcp']);
+      assert.deepEqual(declared(),
+        ['web_search', 'x_search', 'forecast', 'remember', 'forget', 'mcp']);
     });
   });
 
@@ -381,6 +384,128 @@ describe('the proxy', () => {
     xai.send({ type: 'response.output_audio.delta', delta: 'QUJDRA==' });
     const delta = await client.waitFor('response.output_audio.delta');
     assert.equal(delta.delta, 'QUJDRA==');
+  });
+});
+
+describe('the forecast, answered by the proxy', () => {
+  let xai;
+  let meteo;
+  let app;
+
+  before(async () => {
+    xai = await startXaiStub();
+    meteo = await startOpenMeteoStub();
+    app = await startApp({
+      XAI_REALTIME_URL: xai.address,
+      OPEN_METEO_URL: meteo.forecastUrl,
+      OPEN_METEO_GEOCODING_URL: meteo.geocodingUrl,
+      WEATHER_PLACE: 'Grand Rapids, Michigan',
+    });
+  });
+
+  after(async () => {
+    await app.close();
+    await meteo.close();
+    await xai.close();
+  });
+
+  /** What the proxy sent up after the frame that carried the call. */
+  const answers = (from) => xai.received().slice(from)
+    .filter((f) => f.type === 'conversation.item.create' || f.type === 'response.create');
+
+  it('tells the model where it stands, so a bare question has a place', async () => {
+    const client = await app.openSocket();
+    await client.waitFor('proxy.ready');
+    await settle();
+
+    const [update] = xai.received();
+    assert.match(update.session.instructions, /You stand in Grand Rapids, Michigan/);
+    assert.ok(update.session.tools.some((t) => t.name === 'forecast'));
+  });
+
+  it('fetches the weather and hands it back, then asks for a response', async () => {
+    const client = await app.openSocket();
+    await client.waitFor('proxy.ready');
+    const before = xai.received().length;
+
+    xai.send({
+      type: 'response.output_item.done',
+      item: {
+        type: 'function_call',
+        call_id: 'call_1',
+        name: 'forecast',
+        arguments: JSON.stringify({ place: 'Grand Rapids', days: 2 }),
+      },
+    });
+    await settle();
+
+    const [output, respond] = answers(before);
+    assert.equal(output.item.type, 'function_call_output');
+    assert.equal(output.item.call_id, 'call_1');
+    assert.equal(respond.type, 'response.create');
+
+    const forecast = JSON.parse(output.item.output);
+    assert.equal(forecast.ok, true);
+    assert.equal(forecast.place, 'Grand Rapids, Michigan, United States');
+    assert.equal(forecast.units.temperature, 'F');
+    assert.equal(meteo.queries().at(-1).forecast_days, '2');
+  });
+
+  it('answers a call once, however many frames carry it', async () => {
+    const client = await app.openSocket();
+    await client.waitFor('proxy.ready');
+    const before = xai.received().length;
+
+    const call = { type: 'function_call', call_id: 'call_2', name: 'forecast', arguments: '{}' };
+    xai.send({ type: 'response.output_item.done', item: call });
+    xai.send({ type: 'response.done', response: { output: [call] } });
+    await settle();
+
+    const outputs = answers(before).filter((f) => f.type === 'conversation.item.create');
+    assert.equal(outputs.length, 1);
+  });
+
+  it('answers with a sentence rather than a silence when the API is down', async () => {
+    const broken = await startOpenMeteoStub({ fail: 503 });
+    const own = await startApp({
+      XAI_REALTIME_URL: xai.address,
+      OPEN_METEO_URL: broken.forecastUrl,
+      OPEN_METEO_GEOCODING_URL: broken.geocodingUrl,
+      WEATHER_PLACE: 'Grand Rapids, Michigan',
+    });
+
+    try {
+      const client = await own.openSocket();
+      await client.waitFor('proxy.ready');
+      const before = xai.received().length;
+
+      xai.send({
+        type: 'response.function_call_arguments.done',
+        call_id: 'call_3',
+        name: 'forecast',
+        arguments: '{}',
+      });
+      await settle();
+
+      const [output] = answers(before);
+      const said = JSON.parse(output.item.output);
+      assert.equal(said.ok, false);
+      assert.match(said.error, /weather service/);
+    } finally {
+      await own.close();
+      await broken.close();
+    }
+  });
+
+  it('never lets the page fake a forecast call in the model\'s name', async () => {
+    const client = await app.openSocket();
+    await client.waitFor('proxy.ready');
+    const before = xai.received().length;
+
+    client.send({ type: 'response.function_call_arguments.done', call_id: 'x', name: 'forecast' });
+    await settle();
+
+    assert.deepEqual(xai.received().slice(before), [], 'that frame is not on the allowlist');
   });
 });
 

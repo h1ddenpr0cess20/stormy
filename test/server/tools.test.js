@@ -9,6 +9,7 @@ const full = {
   webSearch: true,
   xSearch: true,
   memory: true,
+  weather: true,
   mcpServers: [server('orders'), server('rota')],
 };
 
@@ -17,13 +18,15 @@ describe('toolCatalog', () => {
     assert.deepEqual(toolCatalog(full), [
       { name: 'web_search', label: 'web search' },
       { name: 'x_search', label: 'X search' },
+      { name: 'forecast', label: 'forecast' },
       { name: 'mcp:orders', label: 'orders' },
       { name: 'mcp:rota', label: 'rota' },
     ]);
   });
 
   it('offers no switch for a tool the config left off', () => {
-    const names = toolCatalog({ ...full, webSearch: false, mcpServers: [] }).map((t) => t.name);
+    const names = toolCatalog({ ...full, webSearch: false, weather: false, mcpServers: [] })
+      .map((t) => t.name);
     assert.deepEqual(names, ['x_search']);
   });
 
@@ -49,9 +52,10 @@ describe('switchedOff', () => {
 
 describe('pickTools', () => {
   it('drops what the page switched off and leaves the rest alone', () => {
-    const picked = pickTools(full, ['web_search', 'mcp:orders']);
+    const picked = pickTools(full, ['web_search', 'forecast', 'mcp:orders']);
 
     assert.equal(picked.webSearch, false);
+    assert.equal(picked.weather, false, 'the umbrella can be asked to stop checking');
     assert.equal(picked.xSearch, true);
     assert.equal(picked.memory, true);
     assert.deepEqual(picked.mcpServers.map((s) => s.server_label), ['rota']);
